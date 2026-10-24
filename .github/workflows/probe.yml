@@ -37,32 +37,25 @@ jobs:
             if out=$(gh api repos/$R/git/refs -f ref="refs/tags/$name" -f sha="$sha" --jq .ref 2>&1); then echo "OK"; else echo "FAIL: $out"; fi; }
           verified(){ gh api repos/$R/commits/$1 --jq '"verified="+(.commit.verification.verified|tostring)+" reason="+.commit.verification.reason+" author="+.commit.author.name+" committer="+.commit.committer.name'; }
 
-          # 0. Baseline: tag main HEAD itself
-          report "0 · API, tag sur HEAD de main" "$(api_tag p0-$ID $HEAD_SHA)" "-"
+          MAINT_SHA=$(git rev-parse origin/maint)
+          echo "maint=$MAINT_SHA (branch whose workflows differ from main)"
 
-          # 1. API commit, parent = HEAD
-          C1=$(api_commit $HEAD_SHA 1.0.1-$ID); report "1 · API, commit hors branche, parent = HEAD" "$(api_tag p1-$ID $C1)" "$(verified $C1)"
+          # 6. Ref on an EXISTING commit whose workflows differ from main (no new commit)
+          report "6a · API, nouvelle branche sur un commit existant (workflows différents de main)" "$(gh api repos/$R/git/refs -f ref=refs/heads/b6-$ID -f sha=$MAINT_SHA --jq .ref >/dev/null 2>&1 && echo OK || echo FAIL)" "-"
+          report "6b · API, tag sur un commit existant (workflows différents de main)" "$(api_tag p6-$ID $MAINT_SHA)" "-"
 
-          # 2. API commit, parent = HEAD~1 (workflows differ from main HEAD)
-          C2=$(api_commit $PREV_SHA 1.0.2-$ID); report "2 · API, commit hors branche, parent = HEAD~1 (workflow différent de main)" "$(api_tag p2-$ID $C2)" "$(verified $C2)"
+          # 7. Release commit whose parent is the HEAD of the maint branch
+          C7=$(api_commit $MAINT_SHA 1.0.7-$ID); report "7 · API, commit de release, parent = HEAD de la branche maint" "$(api_tag p7-$ID $C7)" "$(verified $C7)"
 
-          # 3. git push of a tag on a local commit, parent = HEAD
-          git checkout -q --detach $HEAD_SHA; echo '{ "name": "probe", "version": "1.0.3", "private": true }' > package.json
-          git commit -qam "chore(release): 1.0.3"; git tag p3-$ID
-          if out=$(git push origin refs/tags/p3-$ID 2>&1); then r=OK; else r="FAIL: $(echo "$out" | grep -m1 -E 'rejected|error|refusing')"; fi
-          report "3 · git push, commit local, parent = HEAD" "$r" "-"
+          # 8. Same, but first pushed as the new HEAD of maint (fast-forward), then tagged
+          C8=$(api_commit $MAINT_SHA 1.0.8-$ID)
+          if out=$(gh api -X PATCH repos/$R/git/refs/heads/maint -f sha=$C8 --jq .object.sha 2>&1); then ff=OK; else ff="FAIL: $out"; fi
+          report "8 · API, fast-forward de maint vers le commit de release, puis tag" "ff=$ff tag=$(api_tag p8-$ID $C8)" "-"
 
-          # 4. git push of a tag on a local commit, parent = HEAD~1
-          git checkout -q --detach $PREV_SHA; echo '{ "name": "probe", "version": "1.0.4", "private": true }' > package.json
-          git commit -qam "chore(release): 1.0.4"; git tag p4-$ID
-          if out=$(git push origin refs/tags/p4-$ID 2>&1); then r=OK; else r="FAIL: $(echo "$out" | grep -m1 -E 'rejected|error|refusing')"; fi
-          report "4 · git push, commit local, parent = HEAD~1 (workflow différent de main)" "$r" "-"
-
-          # 5. Floating tag: create on C1 then move (force) to a new off-branch commit
-          F1=$(api_tag pv1-$ID $C1)
-          C5=$(api_commit $HEAD_SHA 1.0.5-$ID)
-          if out=$(gh api -X PATCH repos/$R/git/refs/tags/pv1-$ID -f sha=$C5 -F force=true --jq .object.sha 2>&1); then r="OK (create: $F1)"; else r="FAIL: $out (create: $F1)"; fi
-          report "5 · API, tag flottant déplacé vers un autre commit hors branche" "$r" "-"
+          # 9. Release commit whose parent is main HEAD, tree = maint tree (workflows of maint)
+          MTREE=$(gh api repos/$R/git/commits/$MAINT_SHA --jq .tree.sha)
+          C9=$(jq -n --arg t "$MTREE" --arg p "$HEAD_SHA" '{message:"probe 9", tree:$t, parents:[$p]}' | gh api repos/$R/git/commits --input - --jq .sha)
+          report "9 · API, parent = HEAD de main mais arbre = celui de maint" "$(api_tag p9-$ID $C9)" "-"
 
           # Publish the summary as a parentless commit holding only results.md (no workflow in its tree)
           RT=$(jq -n --rawfile c "$GITHUB_STEP_SUMMARY" '{tree:[{path:"results.md",mode:"100644",type:"blob",content:$c}]}' | gh api repos/$R/git/trees --input - --jq .sha)
