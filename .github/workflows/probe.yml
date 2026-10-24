@@ -1,0 +1,61 @@
+name: Probe
+# Can GITHUB_TOKEN tag a commit that is on no branch when the tree holds .github/workflows/?
+on: workflow_dispatch
+permissions:
+  contents: write
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      R: ${{ github.repository }}
+      ID: ${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - uses: actions/checkout@v5
+        with: { fetch-depth: 0 }
+      - name: Probe
+        shell: bash
+        run: |
+          set -u
+          git config user.name "github-actions[bot]"; git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          HEAD_SHA=$(git rev-parse HEAD); PREV_SHA=$(git rev-parse HEAD~1)
+          echo "HEAD=$HEAD_SHA (changes dummy.yml vs HEAD~1=$PREV_SHA)"
+          report(){ echo "| $1 | $2 | $3 |" >> "$GITHUB_STEP_SUMMARY"; echo "RESULT $1 => $2 $3"; }
+          { echo "| Cas | Résultat | Détail |"; echo "| --- | --- | --- |"; } >> "$GITHUB_STEP_SUMMARY"
+
+          # API: commit = <parent> tree + package.json changed, on no branch. Echoes the commit sha.
+          api_commit(){ local parent=$1 ver=$2
+            local ptree=$(gh api repos/$R/git/commits/$parent --jq .tree.sha)
+            local content=$(printf '{ "name": "probe", "version": "%s", "private": true }\n' "$ver")
+            local tree=$(jq -n --arg b "$ptree" --arg c "$content" '{base_tree:$b, tree:[{path:"package.json",mode:"100644",type:"blob",content:$c}]}' | gh api repos/$R/git/trees --input - --jq .sha)
+            jq -n --arg t "$tree" --arg p "$parent" --arg m "chore(release): $ver" '{message:$m, tree:$t, parents:[$p]}' | gh api repos/$R/git/commits --input - --jq .sha; }
+          api_tag(){ local name=$1 sha=$2 out
+            if out=$(gh api repos/$R/git/refs -f ref="refs/tags/$name" -f sha="$sha" --jq .ref 2>&1); then echo "OK"; else echo "FAIL: $out"; fi; }
+          verified(){ gh api repos/$R/commits/$1 --jq '"verified="+(.commit.verification.verified|tostring)+" reason="+.commit.verification.reason+" author="+.commit.author.name+" committer="+.commit.committer.name'; }
+
+          # 0. Baseline: tag main HEAD itself
+          report "0 · API, tag sur HEAD de main" "$(api_tag p0-$ID $HEAD_SHA)" "-"
+
+          # 1. API commit, parent = HEAD
+          C1=$(api_commit $HEAD_SHA 1.0.1-$ID); report "1 · API, commit hors branche, parent = HEAD" "$(api_tag p1-$ID $C1)" "$(verified $C1)"
+
+          # 2. API commit, parent = HEAD~1 (workflows differ from main HEAD)
+          C2=$(api_commit $PREV_SHA 1.0.2-$ID); report "2 · API, commit hors branche, parent = HEAD~1 (workflow différent de main)" "$(api_tag p2-$ID $C2)" "$(verified $C2)"
+
+          # 3. git push of a tag on a local commit, parent = HEAD
+          git checkout -q --detach $HEAD_SHA; echo '{ "name": "probe", "version": "1.0.3", "private": true }' > package.json
+          git commit -qam "chore(release): 1.0.3"; git tag p3-$ID
+          if out=$(git push origin refs/tags/p3-$ID 2>&1); then r=OK; else r="FAIL: $(echo "$out" | grep -m1 -E 'rejected|error|refusing')"; fi
+          report "3 · git push, commit local, parent = HEAD" "$r" "-"
+
+          # 4. git push of a tag on a local commit, parent = HEAD~1
+          git checkout -q --detach $PREV_SHA; echo '{ "name": "probe", "version": "1.0.4", "private": true }' > package.json
+          git commit -qam "chore(release): 1.0.4"; git tag p4-$ID
+          if out=$(git push origin refs/tags/p4-$ID 2>&1); then r=OK; else r="FAIL: $(echo "$out" | grep -m1 -E 'rejected|error|refusing')"; fi
+          report "4 · git push, commit local, parent = HEAD~1 (workflow différent de main)" "$r" "-"
+
+          # 5. Floating tag: create on C1 then move (force) to a new off-branch commit
+          F1=$(api_tag pv1-$ID $C1)
+          C5=$(api_commit $HEAD_SHA 1.0.5-$ID)
+          if out=$(gh api -X PATCH repos/$R/git/refs/tags/pv1-$ID -f sha=$C5 -F force=true --jq .object.sha 2>&1); then r="OK (create: $F1)"; else r="FAIL: $out (create: $F1)"; fi
+          report "5 · API, tag flottant déplacé vers un autre commit hors branche" "$r" "-"

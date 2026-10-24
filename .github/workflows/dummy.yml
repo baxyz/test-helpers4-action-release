@@ -1,0 +1,7 @@
+name: Dummy
+on: workflow_dispatch
+jobs:
+  noop:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo v1
