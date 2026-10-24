@@ -37,6 +37,10 @@ jobs:
             if out=$(gh api repos/$R/git/refs -f ref="refs/tags/$name" -f sha="$sha" --jq .ref 2>&1); then echo "OK"; else echo "FAIL: $out"; fi; }
           verified(){ gh api repos/$R/commits/$1 --jq '"verified="+(.commit.verification.verified|tostring)+" reason="+.commit.verification.reason+" author="+.commit.author.name+" committer="+.commit.committer.name'; }
 
+          C1=$(api_commit $HEAD_SHA 1.0.1-$ID); report "1 · API, commit hors branche, parent = HEAD de main" "$(api_tag p1-$ID $C1)" "$(verified $C1)"
+          OLD=$(git rev-parse HEAD~1)
+          C2=$(api_commit $OLD 1.0.2-$ID); report "2 · API, parent = HEAD~1 de main, sur aucune branche (workflows différents)" "$(api_tag p2-$ID $C2)" "-"
+
           MAINT_SHA=$(git rev-parse origin/maint)
           echo "maint=$MAINT_SHA (branch whose workflows differ from main)"
 
