@@ -4,4 +4,4 @@ jobs:
   noop:
     runs-on: ubuntu-latest
     steps:
-      - run: echo v1
+      - run: echo v2
