@@ -1,6 +1,10 @@
 name: Probe
 # Can GITHUB_TOKEN tag a commit that is on no branch when the tree holds .github/workflows/?
-on: workflow_dispatch
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: [".github/workflows/probe.yml"]
 permissions:
   contents: write
 jobs:
@@ -59,3 +63,8 @@ jobs:
           C5=$(api_commit $HEAD_SHA 1.0.5-$ID)
           if out=$(gh api -X PATCH repos/$R/git/refs/tags/pv1-$ID -f sha=$C5 -F force=true --jq .object.sha 2>&1); then r="OK (create: $F1)"; else r="FAIL: $out (create: $F1)"; fi
           report "5 · API, tag flottant déplacé vers un autre commit hors branche" "$r" "-"
+
+          # Publish the summary as a parentless commit holding only results.md (no workflow in its tree)
+          RT=$(jq -n --rawfile c "$GITHUB_STEP_SUMMARY" '{tree:[{path:"results.md",mode:"100644",type:"blob",content:$c}]}' | gh api repos/$R/git/trees --input - --jq .sha)
+          RC=$(jq -n --arg t "$RT" '{message:"probe results", tree:$t, parents:[]}' | gh api repos/$R/git/commits --input - --jq .sha)
+          gh api repos/$R/git/refs -f ref="refs/tags/results-$ID" -f sha="$RC" --jq .ref
